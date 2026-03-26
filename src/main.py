@@ -20,7 +20,7 @@ class AbstractAccount(ABC):
         self._account_id = str(account_id)
         self._client_personal_data = client_personal_data
         self.account_status = account_status
-        self._protected_balance = protected_balance         #account gets 0 balance when created
+        self._protected_balance = protected_balance
 
     @property
     def allowed_account_statuses_list(self):
@@ -65,20 +65,20 @@ class AbstractAccount(ABC):
 
 class BankAccount(AbstractAccount):
 
-    def __init__(self, client_personal_data: dict, currency: str, account_id = None):
+    def __init__(self, client_personal_data: dict, currency: str, account_id = None, account_status: str = 'active', protected_balance: float = 0):
         """If the client doesn't have an account id, it will be generated"""
         self.currency = currency
         if account_id is None:
             generated_id = str(uuid.uuid4())
         else:
             generated_id = str(self.account_id)
-        super().__init__(generated_id, client_personal_data)
+        super().__init__(generated_id, client_personal_data, account_status, protected_balance)
 
     def __str__(self):
         return (f"{self._account_id} account info:\n"
               f"Account type: {self.__class__.__name__}\n"
               f"Client name: {self._client_personal_data['name']} {self._client_personal_data['surname']}\n"
-              f"Client phone number: ****{self._client_personal_data['phone'][-4:]}"
+              f"Client phone number: ****{self._client_personal_data['phone_number'][-4:]}\n"
               f"Account status: {self._account_status}\n"
               f"Account balance: {self._protected_balance} {self._currency}")
 
@@ -127,6 +127,8 @@ class BankAccount(AbstractAccount):
             raise AccountClosedError("Account is closed. Deposit is not allowed.")
         elif amount <= 0:
             raise InvalidOperationError("Amount must be positive.")
+        elif self.account_status == 'frozen':
+            raise AccountFrozenError("Account is frozen. Deposit is not allowed.")
         else:
             self._protected_balance += amount
         print(f"{amount} {self.currency} has been deposited.")
@@ -148,14 +150,14 @@ class BankAccount(AbstractAccount):
         print(f"{self._account_id} account info:\n"
               f"Account type: {self.__class__.__name__}\n"
               f"Client name: {self._client_personal_data['name']} {self._client_personal_data['surname']}\n"
-              f"Client phone number: ****{self._client_personal_data['phone'][-4:]}"
+              f"Client phone number: ****{self._client_personal_data['phone_number'][-4:]}\n"
               f"Account status: {self._account_status}\n"
               f"Account balance: {self._protected_balance} {self._currency}")
 
 if __name__ == "__main__":
     print("=== Bank system test (Day 1) ===\n")
 
-    # Successful creation test
+    # Successful creation and operations test
     try:
         acc1 = BankAccount(
             client_personal_data={"name": "Joe",
@@ -164,28 +166,64 @@ if __name__ == "__main__":
             currency="USD"
         )
         print(f"Account created: {acc1}")
-        print(f"Account balance: {acc1.protected_balance} {acc1.currency}")
         acc1.deposit(500)
         print(f"Balance after deposit: {acc1.protected_balance} {acc1.currency}")
+        acc1.withdraw(400)
+        print(f"Balance after withdrawal: {acc1.protected_balance} {acc1.currency}")
     except Exception as e:
         print(f"Unexpected error!: {e}")
 
     print("\n" + "-"*40 + "\n")
 
-    # 2. Frozen account test
+    # 2.1. Frozen account test - withdraw
     try:
         acc2 = BankAccount(
-            client_personal_data={"name": "Petrov"},
+            client_personal_data={"name": "Bill",
+                                  "surname": "Gates",
+                                  "phone_number": "+8547230943843"},
             protected_balance=5000.0,
             account_status="frozen",
             currency="USD"
         )
-        print(f"ЗАМОРОЖЕННЫЙ СЧЕТ: {acc2}")
-        print("Попытка снятия денег...")
+        print(f"Frozen account: {acc2}")
+        print("Withdrawal try...")
         acc2.withdraw(100)
+        print(f"Balance after withdrawal: {acc2.protected_balance} {acc2.currency}")
     except AccountFrozenError as e:
-        print(f"✅ Успешно перехвачено ожидаемое исключение: {e}")
+        print(f"The expected exception was successfully caught: {e}")
     except Exception as e:
-        print(f"❌ Ошибка! Ожидалось AccountFrozenError, но получили: {type(e).__name__}")
+        print(f"Error! Expected AccountFrozenError, got instead: {type(e).__name__}")
 
-    # И так далее для остальных случаев...
+    print("\n" + "-" * 40 + "\n")
+
+    # 2.2. Frozen account test - deposit
+    try:
+        acc3 = BankAccount(client_personal_data={"name": "Bill",
+                                  "surname": "Hurley",
+                                  "phone_number": "+854834843843"},
+            protected_balance=5000.0,
+            account_status="frozen",
+            currency="USD")
+        print(f"Frozen account: {acc3}")
+        print("Deposit try...")
+        acc3.deposit(100)
+        print(f"Balance after deposit: {acc3.protected_balance} {acc3.currency}")
+    except AccountFrozenError as e:
+        print(f"The expected exception was successfully caught: {e}")
+    except Exception as e:
+        print(f"Error! Expected AccountFrozenError, got instead: {type(e).__name__}")
+
+    try:
+        acc4 = BankAccount(
+            client_personal_data={"name": "Joe",
+                                  "surname": "Black",
+                                  "phone_number": "+1555555555"},
+            currency="USD"
+        )
+        print(f"Account created: {acc4}")
+        acc4.deposit(500)
+        print(f"Balance after deposit: {acc4.protected_balance} {acc4.currency}")
+        acc4.withdraw(400)
+        print(f"Balance after withdrawal: {acc4.protected_balance} {acc4.currency}")
+    except Exception as e:
+        print(f"Unexpected error!: {e}")
