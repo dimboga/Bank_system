@@ -24,26 +24,26 @@ class AbstractAccount(ABC):
         print(f"Account {self._account_id} is successfully created!")
 
     @property
-    def allowed_account_statuses_list(self):
+    def allowed_account_statuses_list(self) -> list:
         return ["active", "frozen", "closed"]
 
     @property
-    def account_id(self):
+    def account_id(self) -> str:
         """Protected account id attribute"""
         return self._account_id
 
     @property
-    def client_personal_data(self):
+    def client_personal_data(self) -> dict:
         """Protected balance attribute"""
         return self._client_personal_data
 
     @property
-    def protected_balance(self):
+    def protected_balance(self) -> float:
         """Balance of the client that can't be changed from outside"""
         return self._protected_balance
 
     @property
-    def account_status(self):
+    def account_status(self) -> str:
         return self._account_status
 
     @account_status.setter
@@ -100,12 +100,12 @@ class BankAccount(AbstractAccount):
               f"Account balance: {self._protected_balance} {self._currency}")
 
     @property
-    def currency(self):
+    def currency(self) -> str:
         """Protected currency attribute"""
         return self._currency
 
     @property
-    def client_personal_data(self):
+    def client_personal_data(self) -> dict:
         return self._client_personal_data
 
     @client_personal_data.setter
@@ -163,7 +163,7 @@ class SavingsAccount(BankAccount):
         "CNY": 1000.0
     }
 
-    THRESHOLD_MONTHLY_RETURN_RATES = {
+    THRESHOLD_MONTHLY_INTEREST_RATES = {
         "RUB": 1.33,
         "USD": 0.4,
         "EUR": 0.35,
@@ -173,12 +173,12 @@ class SavingsAccount(BankAccount):
 
     # failsafe values to fill if there is no correspondent value for particular currency
     DEFAULT_MIN_BALANCE_AMOUNT = 1000
-    DEFAULT_MONTHLY_RETURN_RATE = 1
+    DEFAULT_MONTHLY_INTEREST_RATE = 1
 
     def __init__(self, client_personal_data: dict, currency: str,
                  account_id:str = None, account_status: str = 'active',
                  protected_balance: float = 0, min_balance: float = None,
-                 monthly_return_rate: float = None):
+                 monthly_interest_rate: float = None):
         super().__init__(client_personal_data, currency, account_id,
                          account_status,protected_balance)
         """Min balance value validation"""
@@ -189,34 +189,34 @@ class SavingsAccount(BankAccount):
                              f"is {self.THRESHOLD_MIN_BALANCE_AMOUNT.get(self._currency, self.DEFAULT_MIN_BALANCE_AMOUNT)}.")
         else:
             self._min_balance = min_balance
-        """Monthly return rate value validation"""
-        if monthly_return_rate is None:
-            self._monthly_return_rate = self.THRESHOLD_MONTHLY_RETURN_RATES.get(self._currency, self.DEFAULT_MONTHLY_RETURN_RATE)
-        elif monthly_return_rate < self.THRESHOLD_MONTHLY_RETURN_RATES.get(self._currency, self.DEFAULT_MONTHLY_RETURN_RATE):
+        """Monthly interest rate value validation"""
+        if monthly_interest_rate is None:
+            self._monthly_interest_rate = self.THRESHOLD_MONTHLY_INTEREST_RATES.get(self._currency, self.DEFAULT_MONTHLY_INTEREST_RATE)
+        elif monthly_interest_rate < self.THRESHOLD_MONTHLY_INTEREST_RATES.get(self._currency, self.DEFAULT_MONTHLY_INTEREST_RATE):
             raise ValueError(f"Monthly rate is too small!Threshold for {self._currency} "
-                             f"is {self.THRESHOLD_MONTHLY_RETURN_RATES.get(self._currency, self.DEFAULT_MONTHLY_RETURN_RATE)}.")
+                             f"is {self.THRESHOLD_MONTHLY_INTEREST_RATES.get(self._currency, self.DEFAULT_MONTHLY_INTEREST_RATE)}.")
         else:
-            self._monthly_return_rate = monthly_return_rate
+            self._monthly_interest_rate = monthly_interest_rate
 
     def __str__(self):
         parent_str_string = super().__str__()
         return (f"{parent_str_string}\n"
                 f"Minimum balance threshold: {self._min_balance} {self._currency}\n"
-              f"Monthly return rate: {self._monthly_return_rate}%")
+              f"Monthly interest rate: {self._monthly_interest_rate}%")
 
     @property
-    def min_balance(self):
+    def min_balance(self) -> float:
         return self._min_balance
 
     @property
-    def monthly_return_rate(self):
-        return self._monthly_return_rate
+    def monthly_interest_rate(self) -> float:
+        return self._monthly_interest_rate
 
     def apply_monthly_interest(self):
         if self._protected_balance < self._min_balance:
             raise InvalidOperationError(f"To apply monthly interest balance should be equal or more then minimum balance {self._min_balance} {self._currency}.")
         else:
-            self._protected_balance += self._protected_balance * (self._monthly_return_rate / self.PERCENT_FACTOR)
+            self._protected_balance += self._protected_balance * (self._monthly_interest_rate / self.PERCENT_FACTOR)
             print(f"Monthly interest has been applied. Current balance: {self._protected_balance} {self._currency}")
 
     def withdraw(self, amount: float):
@@ -227,7 +227,7 @@ class SavingsAccount(BankAccount):
     def get_account_info(self):
         parent_acc_info_string = super().get_account_info()
         return(f"{parent_acc_info_string}\n"
-               f"Monthly return rate: {self._monthly_return_rate}%\n"
+               f"Monthly interest rate: {self._monthly_interest_rate}%\n"
                f"Minimal balance threshold: {self._min_balance} {self._currency}")
 
 class PremiumAccount(BankAccount):
@@ -343,6 +343,178 @@ class PremiumAccount(BankAccount):
                 f"Overdraft available: {self._overdraft_limit + min(self._protected_balance, 0)} {self._currency}"
                 f"Fixed withdrawal commission: {self._fixed_withdrawal_commission} {self._currency}")
 
+class InvestmentAccount(BankAccount):
+
+    ALLOWED_ASSETS_LIST = ['stocks', 'bonds', 'etf']
+
+    THRESHOLD_YEARLY_INTEREST_RATES = {
+        "stocks": 15,
+        "bonds": 5,
+        "etf": 10
+    }
+
+    #The balance share that should always remain on account
+    MINIMAL_CASH_RESERVER_SHARE = 10
+
+    #Ideally we should have a ticker price dict parsed from some API, here we just put the equal price for every asset
+    ASSET_CURRENT_PRICE = 100
+
+    def __init__(self, client_personal_data: dict, currency: str,
+                 account_id:str = None, account_status: str = 'active',
+                 protected_balance: float = 0, portfolios: dict = None):
+
+        super().__init__(client_personal_data, currency, account_id,
+                         account_status, protected_balance)
+        if portfolios is None:
+            self._portfolios = {} #it is possible to open account with empty portfolio
+        elif not isinstance(portfolios, dict):
+            raise ValueError("Incorrect format of client portfolios! Please, send dictionary with portfolios!")
+        else:
+            for folio_name, assets_dict in portfolios.items():
+                if not assets_dict:
+                    raise ValueError(f"Portfolio {folio_name} is empty! Portfolio should contain at least one virtual asset.")
+                for asset_name, tickers_dict in assets_dict.items():
+                    if asset_name not in self.ALLOWED_ASSETS_LIST:
+                        raise ValueError(f"{asset_name} is not eligible type of asset ({self.ALLOWED_ASSETS_LIST})")
+                    for ticker_name, ticker_amount in tickers_dict.items():
+                        if (not tickers_dict[ticker_name]) or (ticker_amount == 0):
+                            raise ValueError(f"Ticker {ticker_name} is empty! Ticker should have its amount.")
+                        elif ticker_amount < 0:
+                            raise ValueError(f"Ticker amount should be positive.")
+            self._portfolios = portfolios
+
+    def __str__(self):
+        # 1. Taking the base from the parent class
+        res = [super().__str__(), "\nInvesting portfolio:"]
+
+        if not self._portfolios or self._portfolios == {}:
+            res.append("   (no assets)")
+        else:
+            # 2. Iterating through portfolios
+            for p_name, assets in self._portfolios.items():
+                res.append(f"\n  Portfolio: **{p_name}**")
+
+                # 3. Iterating through assets
+                for a_type, tickers in assets.items():
+                    if tickers:  # Typing category if it contains anything
+                        res.append(f"    {a_type.upper()}:")
+
+                        # 4. Writing tickers
+                        for ticker, qty in tickers.items():
+                            # :.<15 — left side aligning (15 symbols)
+                            # :>10 — right side aligning (10 symbols)
+                            res.append(f"      - {ticker:.<15} {qty:>10} pcs.")
+
+        return "\n".join(res)
+
+    @property
+    def portfolios(self) -> dict:
+        """"Portfolio is also a protected attribute that can me manipulated only through methods"""
+        return self._portfolios
+
+    def add_new_portfolio(self, portfolio_name: str):
+        """Creates a new portfolio with the set of available assets"""
+        if portfolio_name in self._portfolios:
+            raise InvalidOperationError(f"Portfolio {portfolio_name} already exists!")
+        else:
+            self._portfolios[portfolio_name] = {asset_name: {} for asset_name in self.ALLOWED_ASSETS_LIST}
+
+    def buy_asset(self, portfolio_name: str, asset: str, ticker: str, amount: int):
+
+        #Check if the portfolio exists
+        if portfolio_name not in self._portfolios:
+            self.add_new_portfolio(portfolio_name)
+
+        #Check if the asset is in allowed list
+        if asset not in self.ALLOWED_ASSETS_LIST:
+            raise InvalidOperationError(f"{asset} is not eligible type of asset!")
+
+        if amount <= 0:
+            raise InvalidOperationError("Amount must be positive!")
+        else:
+            current_qty = self._portfolios[portfolio_name][asset].get(ticker, 0)
+            new_qty = current_qty + amount
+            self._portfolios[portfolio_name][asset][ticker] = new_qty
+            print(f"{amount} {ticker} has been bought.")
+
+    def sell_asset(self, portfolio_name: str, asset: str, ticker: str, amount: int):
+
+        # Check if the portfolio exists
+        if portfolio_name not in self._portfolios:
+            raise InvalidOperationError(f"{portfolio_name} portfolio does not exist!")
+        elif asset not in self._portfolios[portfolio_name].keys():
+            raise InvalidOperationError(f"You don't have {asset} in {portfolio_name} portfolio!")
+
+        if amount <= 0:
+            raise InvalidOperationError("Amount must be positive!")
+
+        current_qty = self._portfolios[portfolio_name][asset].get(ticker, 0)
+        new_qty = current_qty + amount
+        if new_qty < 0: # our bank doesn't open short positions yet
+            raise InvalidOperationError(f"Not enough ticker amount! Current amount is {current_qty}.")
+        elif new_qty == 0:
+            del self._portfolios[portfolio_name][asset][ticker]
+            print(f"{amount} {ticker} has been sold.")
+        else:
+            self._portfolios[portfolio_name][asset][ticker] = new_qty
+            print(f"{amount} {ticker} has been sold.")
+
+    def withdraw(self, amount: float):
+        #Maximum cash to withdraw
+        max_available = self._protected_balance * (1 - (self.MINIMAL_CASH_RESERVER_SHARE / self.PERCENT_FACTOR))
+
+        withdraw_commission = amount * (
+                    self.DEFAULT_WITHDRAWAL_COMMISSION_PERCENTAGE / self.PERCENT_FACTOR)
+
+        if amount + withdraw_commission > max_available:
+            raise InvalidOperationError(f"Amount can't be withdrawn! "
+                                        f"No more then {self.PERCENT_FACTOR - self.MINIMAL_CASH_RESERVER_SHARE}% "
+                                        f"of balance is allowed to be withdrawn to maintain liquidity.")
+
+    def get_account_info(self):
+        # 1. Taking the base from the parent class
+        res = [super().get_account_info(), "\nInvesting portfolio:"]
+
+        if not self._portfolios or self._portfolios == {}:
+            res.append("   (no assets)")
+        else:
+            # 2. Iterating through portfolios
+            for p_name, assets in self._portfolios.items():
+                res.append(f"\n  Portfolio: **{p_name}**")
+
+                # 3. Iterating through assets
+                for a_type, tickers in assets.items():
+                    if tickers:  # Typing category if it contains anything
+                        res.append(f"    {a_type.upper()}:")
+
+                        # 4. Writing tickers
+                        for ticker, qty in tickers.items():
+                            # :.<15 — left side aligning (15 symbols)
+                            # :>10 — right side aligning (10 symbols)
+                            res.append(f"      - {ticker:.<15} {qty:>10} pcs.")
+
+        return print("\n".join(res))
+
+    def project_yearly_growth(self, portfolio_name: str):
+        """Projected worth for particular portfolio. So that different portfolios can be compared by yearly profit."""
+        net_worth_now = 0
+        net_worth_year_after = 0
+        for asset_name, tickers_dict in self._portfolios[portfolio_name].items():
+            for ticker_name, ticker_amount in tickers_dict.items():
+                net_worth_now += ticker_amount * self.ASSET_CURRENT_PRICE
+                net_worth_year_after += (ticker_amount * self.ASSET_CURRENT_PRICE) * (1 + (self.THRESHOLD_YEARLY_INTEREST_RATES.get(asset_name, 0) / 100))
+        return print(f"Projected yearly growth of {portfolio_name} portfolio "
+                f"is {((net_worth_year_after / net_worth_now) - 1) * 100:.2f}%\n"
+                f"Estimated value of portfolio in a year: {net_worth_year_after:.2f}\n")
+
+# acc = InvestmentAccount(client_personal_data={"name": "Joe",
+#                                   "surname": "Black",
+#                                   "phone_number": "+1555555555"},
+#             currency="USD")
+# acc.buy_asset('main', 'stocks', 'AAPL', 100)
+# acc.buy_asset('main', 'bonds', 'Govt', 570)
+#
+# acc.project_yearly_growth('main')
 
 # if __name__ == "__main__":
 #     print("=== Bank system test (Day 1) ===\n")
