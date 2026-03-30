@@ -1,5 +1,8 @@
 from abc import ABC, abstractmethod
+from datetime import datetime, timedelta
+from dateutil.relativedelta import relativedelta
 import uuid
+import yfinance as yf
 
 class AccountFrozenError(Exception):
     pass
@@ -13,19 +16,131 @@ class InvalidOperationError(Exception):
 class InsufficientFundsError(Exception):
     pass
 
+class Bank:
+
+    MINIMAL_PASSWORD_LENGTH = 8
+
+    def __init__(self):
+        self._accounts = []
+        self._clients = []
+        self._internet_banking_credentials = {}
+
+    @property
+    def accounts(self) -> list[AbstractAccount]:
+        return self._accounts
+
+    @property
+    def clients(self) -> list[Client]:
+        return self._clients
+
+    @property
+    def internet_banking_credentials(self) -> dict:
+        return self._internet_banking_credentials
+
+    def add_credentials(self, login: str, password: str):
+        if login in self._internet_banking_credentials:
+            raise InvalidOperationError(f"Login {login} already exists! Please, choose another one.")
+        elif len(password) < self.MINIMAL_PASSWORD_LENGTH:
+            raise InvalidOperationError(f"Password has to be at least {self.MINIMAL_PASSWORD_LENGTH} characters!")
+
+    def add_client(self, client: Client):
+        if client not in self._clients:
+            self._clients.append(client)
+        else:
+            raise InvalidOperationError(f"Client {client.client_id} already exists!")
+
+    def open_account(self, account: AbstractAccount):
+        if account not in self._accounts:
+            self._accounts.append(account)
+        else:
+            raise InvalidOperationError(f"Account {account.account_id} already exists!")
+
+    def close_account(self, account: AbstractAccount):
+        if account not in self._accounts:
+            raise InvalidOperationError(f"Account {account.account_id} does not exist in {self} bank!")
+        elif account.account_status == "closed":
+            raise InvalidOperationError(f"Account {account.account_id} is already closed!")
+        else:
+            account.account_status = "closed"
+            print(f"Account {account.account_id} has been closed!")
+
+    def freeze_account(self, account: AbstractAccount):
+        if account not in self._accounts:
+            raise InvalidOperationError(f"Account {account.account_id} does not exist in {self} bank!")
+        elif account.account_status == "frozen":
+            raise InvalidOperationError(f"Account {account.account_id} is already frozen!")
+        else:
+            account.account_status = "frozen"
+            print(f"Account {account.account_id} has been frozen!")
+
+    def unfreeze_account(self, account: AbstractAccount):
+        if account not in self._accounts:
+            raise InvalidOperationError(f"Account {account.account_id} does not exist in {self} bank!")
+        elif account.account_status != "frozen":
+            raise InvalidOperationError(f"Account {account.account_id} is not frozen!")
+        else:
+            account.account_status = "active"
+            print(f"Account {account.account_id} has been unfrozen!")
+
+    def change_password(self, client: Client, new_password: str):
+        if client not in self._clients:
+            raise InvalidOperationError(f"Client {client.client_id} does not exist in {self} bank!")
+        elif client.client_account_status == "fully_blocked":
+            raise InvalidOperationError(f"Client account is fully blocked.Changing of password is prohibited.")
+        elif len(new_password) < self.MINIMAL_PASSWORD_LENGTH: #Basic password validation
+            raise InvalidOperationError(f"Password has to be at least {self.MINIMAL_PASSWORD_LENGTH} characters!")
+        else:
+            client._client_password = new_password
+            self._internet_banking_credentials[client.client_login] = new_password
+
+    def authenticate_client(self, client: Client, login: str, password: str):
+        if client not in self._clients:
+            raise InvalidOperationError(f"Client account {client.client_id} does not exist in {self} bank!")
+        elif client.client_account_status == "fully_blocked":
+            raise InvalidOperationError(f"Client account {client.client_id} is fully blocked! Access to internet banking is prohibited.")
+        elif client.client_account_status == "temporarily_blocked" or client._failed_attempts >= client.FAILED_ATTEMPTS_TO_TEMP_BLOCK:
+            raise InvalidOperationError(f"Client account {client.client_id} is temporarily blocked! Access denied!")
+        elif login != client.client_login or password != client.client_password:
+            client._failed_attempts += 1
+            if client._failed_attempts < 3:
+                print(f"Login or password is incorrect! Try again.")
+            else:
+                raise InvalidOperationError(f"Client account {client.client_id} is temporarily blocked! Access denied!")
+        else:
+            client._failed_attempts = 0
+            print(f"Successful authentication!")
+
+    def search_accounts(self, client: Client):
+        if client not in self._clients:
+            raise InvalidOperationError(f"Client account {client.client_id} does not exist in {self} bank!")
+        elif len(client.account_ids) == 0:
+            print(f"Client {client.client_id} has no accounts!")
+        else:
+            print(f"Client {client.client_id} account ids:")
+            for account in client.account_ids:
+                print(account)
+
+best_bank = Bank() #Insert the name of our bank here :)
 
 class AbstractAccount(ABC):
 
-    def __init__(self, account_id: str, client_personal_data: dict, account_status: str = 'active', protected_balance: float = 0):
+    ALLOWED_ACCOUNT_STATUSES_LIST = ["active", "frozen", "closed"]
+
+    def __init__(self, account_id: str, client: Client,
+                 account_status: str = 'active', protected_balance: float = 0,
+                 bank: Bank = best_bank):
         self._account_id = str(account_id)
-        self._client_personal_data = client_personal_data
+        self._client = client
         self.account_status = account_status
         self._protected_balance = protected_balance
-        print(f"Account {self._account_id} is successfully created!")
+        self._bank = bank
+        self._bank.open_account(self) #Adding account to the list of all accounts
+        self._client.link_account(self._account_id)  #Connect client and account
+        print(f"Account {self._account_id} has been successfully created!")
 
     @property
-    def allowed_account_statuses_list(self) -> list:
-        return ["active", "frozen", "closed"]
+    def bank(self) -> Bank:
+        return self._bank
 
     @property
     def account_id(self) -> str:
@@ -33,9 +148,9 @@ class AbstractAccount(ABC):
         return self._account_id
 
     @property
-    def client_personal_data(self) -> dict:
-        """Protected balance attribute"""
-        return self._client_personal_data
+    def client(self) -> Client:
+        """Protected client attribute"""
+        return self._client
 
     @property
     def protected_balance(self) -> float:
@@ -49,8 +164,8 @@ class AbstractAccount(ABC):
     @account_status.setter
     def account_status(self, account_status: str):
         """Account status validation"""
-        if not account_status in self.allowed_account_statuses_list:
-            raise ValueError(f"Incorrect account status! Please choose from {self.allowed_account_statuses_list}")
+        if not account_status in self.ALLOWED_ACCOUNT_STATUSES_LIST:
+            raise ValueError(f"Incorrect account status! Please choose from {self.ALLOWED_ACCOUNT_STATUSES_LIST}")
         else:
             self._account_status = account_status
 
@@ -68,34 +183,31 @@ class AbstractAccount(ABC):
 
 class BankAccount(AbstractAccount):
 
-    MINIMAL_PHONE_NUMBER_LENGTH = 8
-
     BANK_ACCOUNT_ALLOWED_CURRENCIES_LIST = ["RUB", "USD", "EUR", "KZT", "CNY"]
-
-    BANK_ACCOUNT_REQUIRED_PERSONAL_DATA_ATTRIBUTES_LIST = ["name", "surname", "phone_number"]
 
     PERCENT_FACTOR = 100
 
     DEFAULT_WITHDRAWAL_COMMISSION_PERCENTAGE = 0.5
 
-    def __init__(self, client_personal_data: dict, currency: str, account_id:str = None, account_status: str = 'active', protected_balance: float = 0):
-        """If the client doesn't have an account id, it will be generated"""
+    def __init__(self, client: Client, currency: str, account_id:str = None, account_status: str = 'active', protected_balance: float = 0):
+        """If the client doesn't have an account id, it will be generated.
+        Currency is an immutable attribute after initialization."""
         if account_id is None:
             generated_id = str(uuid.uuid4())
         else:
             generated_id = str(account_id)
-        super().__init__(generated_id, client_personal_data, account_status, protected_balance)
+        super().__init__(generated_id, client, account_status, protected_balance)
         if not currency in self.BANK_ACCOUNT_ALLOWED_CURRENCIES_LIST:
             raise ValueError(f"Incorrect currency! Please choose from {self.BANK_ACCOUNT_ALLOWED_CURRENCIES_LIST}")
         else:
             self._currency = currency
-        self.client_personal_data = client_personal_data
 
     def __str__(self):
+        mobile_phone_str = f'****{self._client.mobile_phone_number[-4:]}' if self._client.mobile_phone_number else f'None'
         return (f"{self._account_id} account info:\n"
               f"Account type: {self.__class__.__name__}\n"
-              f"Client name: {self._client_personal_data.get('name', 'N/A')} {self._client_personal_data.get('surname', 'N/A')}\n"
-              f"Client phone number: ****{self._client_personal_data.get('phone_number', 'N/A')[-4:]}\n"
+              f"Client name: {self._client.client_name} {self._client.client_surname} {self._client.client_middle_name}\n"
+              f"Client phone number: {mobile_phone_str}\n"
               f"Account status: {self._account_status}\n"
               f"Account balance: {self._protected_balance} {self._currency}")
 
@@ -103,22 +215,6 @@ class BankAccount(AbstractAccount):
     def currency(self) -> str:
         """Protected currency attribute"""
         return self._currency
-
-    @property
-    def client_personal_data(self) -> dict:
-        return self._client_personal_data
-
-    @client_personal_data.setter
-    def client_personal_data(self, client_personal_data: dict):
-        if not isinstance(client_personal_data, dict):
-            raise ValueError("Incorrect format of client personal data! Please, send dictionary")
-        for attribute in self.BANK_ACCOUNT_REQUIRED_PERSONAL_DATA_ATTRIBUTES_LIST:
-            if not attribute in client_personal_data:
-                raise ValueError(f"Personal data dictionary should contain {attribute} key and value!")
-        if len(client_personal_data['phone_number']) < self.MINIMAL_PHONE_NUMBER_LENGTH:
-            raise ValueError("Phone number is too short!")
-        self._client_personal_data = client_personal_data
-
 
     def deposit(self, amount: float):
         if self._account_status == 'closed':
@@ -146,7 +242,7 @@ class BankAccount(AbstractAccount):
             self._protected_balance -= (amount + withdraw_commission)
         print(f"{amount} {self._currency} has been withdrawn.\n"
               f"{self.DEFAULT_WITHDRAWAL_COMMISSION_PERCENTAGE}% withdrawal commission has been applied ({withdraw_commission} {self._currency})\n"
-              f"Current balance: {self._protected_balance} {self._currency}\n")
+              f"Current balance: {self._protected_balance} {self._currency}")
 
     def get_account_info(self):
         return(f"Current balance: {self._protected_balance} {self._currency}\n"
@@ -175,11 +271,12 @@ class SavingsAccount(BankAccount):
     DEFAULT_MIN_BALANCE_AMOUNT = 1000
     DEFAULT_MONTHLY_INTEREST_RATE = 1
 
-    def __init__(self, client_personal_data: dict, currency: str,
+    def __init__(self, client: Client, currency: str,
                  account_id:str = None, account_status: str = 'active',
                  protected_balance: float = 0, min_balance: float = None,
                  monthly_interest_rate: float = None):
-        super().__init__(client_personal_data, currency, account_id,
+        """Min_balance and monthly_interest_rate are immutable attributes after initialization."""
+        super().__init__(client, currency, account_id,
                          account_status,protected_balance)
         """Min balance value validation"""
         if min_balance is None:
@@ -261,12 +358,12 @@ class PremiumAccount(BankAccount):
     DEFAULT_OVERDRAFT_LIMIT = 10000
     DEFAULT_FIXED_WITHDRAWAL_COMMISSION = 250
 
-    def __init__(self, client_personal_data: dict, currency: str,
+    def __init__(self, client: Client, currency: str,
                  account_id:str = None, account_status: str = 'active',
                  protected_balance: float = 0, max_withdrawal_limit: float = None,
                  overdraft_limit: float = None, fixed_withdrawal_commission: float = None):
-
-        super().__init__(client_personal_data, currency, account_id,
+        """Withdrawal_limit, Overdraft_limit and Fixed_withdrawal_commission are immutable attributes after initialization."""
+        super().__init__(client, currency, account_id,
                          account_status, protected_balance)
 
         """Withdrawal limit value validation"""
@@ -345,25 +442,23 @@ class PremiumAccount(BankAccount):
 
 class InvestmentAccount(BankAccount):
 
-    ALLOWED_ASSETS_LIST = ['stocks', 'bonds', 'etf']
+    ALLOWED_ASSETS_LIST = ['stocks', 'bonds', 'etfs']
 
     THRESHOLD_YEARLY_INTEREST_RATES = {
         "stocks": 15,
         "bonds": 5,
-        "etf": 10
+        "etfs": 10
     }
 
     #The balance share that should always remain on account
     MINIMAL_CASH_RESERVER_SHARE = 10
 
-    #Ideally we should have a ticker price dict parsed from some API, here we just put the equal price for every asset
-    ASSET_CURRENT_PRICE = 100
-
-    def __init__(self, client_personal_data: dict, currency: str,
+    def __init__(self, client: Client, currency: str,
                  account_id:str = None, account_status: str = 'active',
                  protected_balance: float = 0, portfolios: dict = None):
-
-        super().__init__(client_personal_data, currency, account_id,
+        """Portfolios is a protected attribute after initialization.
+        Can be changed only through defined class methods."""
+        super().__init__(client, currency, account_id,
                          account_status, protected_balance)
         if portfolios is None:
             self._portfolios = {} #it is possible to open account with empty portfolio
@@ -420,7 +515,7 @@ class InvestmentAccount(BankAccount):
             self._portfolios[portfolio_name] = {asset_name: {} for asset_name in self.ALLOWED_ASSETS_LIST}
 
     def buy_asset(self, portfolio_name: str, asset: str, ticker: str, amount: int):
-
+        """Adds the specified asset to the portfolio."""
         #Check if the portfolio exists
         if portfolio_name not in self._portfolios:
             self.add_new_portfolio(portfolio_name)
@@ -438,7 +533,7 @@ class InvestmentAccount(BankAccount):
             print(f"{amount} {ticker} has been bought.")
 
     def sell_asset(self, portfolio_name: str, asset: str, ticker: str, amount: int):
-
+        """Sells the specified asset from the portfolio."""
         # Check if the portfolio exists
         if portfolio_name not in self._portfolios:
             raise InvalidOperationError(f"{portfolio_name} portfolio does not exist!")
@@ -449,7 +544,7 @@ class InvestmentAccount(BankAccount):
             raise InvalidOperationError("Amount must be positive!")
 
         current_qty = self._portfolios[portfolio_name][asset].get(ticker, 0)
-        new_qty = current_qty + amount
+        new_qty = current_qty - amount
         if new_qty < 0: # our bank doesn't open short positions yet
             raise InvalidOperationError(f"Not enough ticker amount! Current amount is {current_qty}.")
         elif new_qty == 0:
@@ -470,6 +565,8 @@ class InvestmentAccount(BankAccount):
             raise InvalidOperationError(f"Amount can't be withdrawn! "
                                         f"No more then {self.PERCENT_FACTOR - self.MINIMAL_CASH_RESERVER_SHARE}% "
                                         f"of balance is allowed to be withdrawn to maintain liquidity.")
+        else:
+            super().withdraw(amount)
 
     def get_account_info(self):
         # 1. Taking the base from the parent class
@@ -493,28 +590,177 @@ class InvestmentAccount(BankAccount):
                             # :>10 — right side aligning (10 symbols)
                             res.append(f"      - {ticker:.<15} {qty:>10} pcs.")
 
-        return print("\n".join(res))
+        print("\n".join(res))
 
     def project_yearly_growth(self, portfolio_name: str):
-        """Projected worth for particular portfolio. So that different portfolios can be compared by yearly profit."""
+        """Projected worth for particular portfolio. So that different portfolios can be compared by yearly profit.
+        Prices are available only for assets that are listed on Yahoo Finance."""
         net_worth_now = 0
         net_worth_year_after = 0
+
+        if portfolio_name not in self._portfolios:
+            raise InvalidOperationError(f"{portfolio_name} portfolio does not exist!")
+
         for asset_name, tickers_dict in self._portfolios[portfolio_name].items():
             for ticker_name, ticker_amount in tickers_dict.items():
-                net_worth_now += ticker_amount * self.ASSET_CURRENT_PRICE
-                net_worth_year_after += (ticker_amount * self.ASSET_CURRENT_PRICE) * (1 + (self.THRESHOLD_YEARLY_INTEREST_RATES.get(asset_name, 0) / 100))
-        return print(f"Projected yearly growth of {portfolio_name} portfolio "
-                f"is {((net_worth_year_after / net_worth_now) - 1) * 100:.2f}%\n"
-                f"Estimated value of portfolio in a year: {net_worth_year_after:.2f}\n")
+                try:
+                    ticker_yahoo = yf.Ticker(ticker_name)
+                    data = ticker_yahoo.history()
+                    last_quote = data['Close'].iloc[-1]
+                except: #If there is no such ticker in Yahoo Finance it will raise the error, but the code will still compute
+                    last_quote = 0
+                net_worth_now += ticker_amount * last_quote
+                net_worth_year_after += ((ticker_amount * last_quote) *
+                                         (1 + (self.THRESHOLD_YEARLY_INTEREST_RATES.get(asset_name, 0) / 100)))
 
-# acc = InvestmentAccount(client_personal_data={"name": "Joe",
-#                                   "surname": "Black",
-#                                   "phone_number": "+1555555555"},
-#             currency="USD")
-# acc.buy_asset('main', 'stocks', 'AAPL', 100)
-# acc.buy_asset('main', 'bonds', 'Govt', 570)
-#
-# acc.project_yearly_growth('main')
+        if net_worth_now > 0:
+            print(f"Projected yearly growth of {portfolio_name} portfolio "
+                    f"is {((net_worth_year_after / net_worth_now) - 1) * 100:.2f}%\n"
+                    f"Current value of portfolio: {net_worth_now:.2f} USD\n"
+                    f"Estimated value of portfolio in a year: {net_worth_year_after:.2f} USD\n")
+        else:
+            print(f"{portfolio_name} portfolio is empty or its assets don't have price data.")
+
+class Client:
+
+    ALLOWED_CLIENT_ACCOUNT_STATUSES_LIST = ['active', 'temporarily_blocked', 'fully_blocked']
+
+    DATE_FORMAT = '%Y-%m-%d'
+
+    AGE_RESTRICTION_YEARS_NUMBER = 18
+
+    FAILED_ATTEMPTS_TO_TEMP_BLOCK = 3
+
+    def __init__(self, client_name: str, client_surname: str,
+                 client_contacts: dict, client_birthdate: str,
+                 client_login:str, client_password: str,
+                 client_middle_name: str = '', client_id: str = None,
+                 client_account_status:str = 'active', bank: Bank = best_bank,
+                 failed_attempts = 0):
+        self.client_name = client_name
+        self.client_surname = client_surname
+        self.client_middle_name = client_middle_name
+
+        if failed_attempts >= self.FAILED_ATTEMPTS_TO_TEMP_BLOCK:
+            self.client_account_status = 'temporarily_blocked'
+        else:
+            self.client_account_status = client_account_status
+
+        self._client_login = client_login
+        self._client_password = client_password
+
+        if not isinstance(client_contacts, dict):
+            raise ValueError("Incorrect format of client contacts data! Please, send dictionary")
+        else:
+            self.client_contacts = client_contacts
+            self.mobile_phone_number = client_contacts.get('mobile_phone_number', None)
+            #Basic email validation
+            if client_contacts.get('email', None) is not None and '@' not in client_contacts['email']:
+                raise ValueError("Incorrect format of email!")
+            else:
+                self.email = client_contacts.get('email', None)
+
+        self.client_birthdate = client_birthdate
+        self._account_ids = []  # List of all account_ids of the client
+
+        if client_id is None:
+            self._client_id = str(uuid.uuid4())
+        else:
+            self._client_id = str(client_id)
+
+        self._bank = bank
+        self._bank.add_client(self)
+        self._failed_attempts = failed_attempts
+
+        self._bank.add_credentials(self.client_login, self.client_password)
+        print(f"Client {self._client_id} has been successfully created")
+
+
+    def __str__(self):
+        mobile_phone_str = f'****{self.mobile_phone_number[-4:]}' if self.mobile_phone_number else f'None'
+        email_str = (f'{self.email[:4]}'
+                     f'{'*'*(len(self.email[:self.email.index('@')]) - 4)}'
+                     f'{self.email[self.email.index('@'):]}') if self.email else f'None'
+        return (f"Client name: {self.client_name} {self.client_surname} {self.client_middle_name}\n"
+                f"Client id: {self._client_id}\n"
+                f"Client account status: {self.client_account_status}\n"
+                f"Client birthdate: {self.client_birthdate}\n"
+                f"Client mobile phone number: {mobile_phone_str}\n"
+                f"Client email: {email_str}")
+
+    @property
+    def client_login(self) -> str:
+        return self._client_login
+
+    @property
+    def client_password(self) -> str:
+        return self._client_password
+
+    @property
+    def failed_attempts(self) -> int:
+        return self._failed_attempts
+
+    @property
+    def bank(self) -> Bank:
+        return self._bank
+
+    @property
+    def client_id(self) -> str:
+        return self._client_id
+
+    @property
+    def client_account_status(self):
+        return self._client_account_status
+
+    @client_account_status.setter
+    def client_account_status(self, client_account_status: str):
+        """Account status validation"""
+        if not client_account_status in self.ALLOWED_CLIENT_ACCOUNT_STATUSES_LIST:
+            raise ValueError(f"Incorrect account status! Please choose from {self.ALLOWED_CLIENT_ACCOUNT_STATUSES_LIST}")
+        else:
+            self._client_account_status = client_account_status
+
+    @property
+    def client_birthdate(self) -> str:
+        return self._client_birthdate
+
+    #There is still a possibility to change the birthday of a client is case of typos while creating.
+    @client_birthdate.setter
+    def client_birthdate(self, client_birthdate: str):
+        """Birthdate validation"""
+        try:
+            date_obj = datetime.strptime(client_birthdate, self.DATE_FORMAT) #If the format is different there will be an error raised here
+            if date_obj + relativedelta(years=self.AGE_RESTRICTION_YEARS_NUMBER) > datetime.now():
+                raise InvalidOperationError(f"Client should be {self.AGE_RESTRICTION_YEARS_NUMBER} years or older!")
+            else:
+                self._client_birthdate = date_obj.strftime(self.DATE_FORMAT)
+        except Exception as e:
+            raise InvalidOperationError(e)
+
+    @property
+    def account_ids(self):
+        """The list of account ids is a protected attribute."""
+        return self._account_ids
+
+    def link_account(self, account_id: str):
+        """Method to connect account to a client."""
+        if account_id not in self._account_ids:
+            self._account_ids.append(account_id)
+
+client_1 = Client(
+    client_name='',
+    client_surname='',
+    client_login = 'huihui',
+    client_password = 'pizdapizda',
+    client_contacts={'email': 'superkoteman@mail.ru',
+                     'mobile_phone_number' : '+729458u29485925'
+                     }, client_birthdate='1900-03-01')
+
+acc_1 = SavingsAccount(client_1, currency='USD')
+acc_2 = PremiumAccount(client_1, currency='USD')
+
+best_bank.search_accounts(client_1)
+
 
 # if __name__ == "__main__":
 #     print("=== Bank system test (Day 1) ===\n")
@@ -523,21 +769,21 @@ class InvestmentAccount(BankAccount):
 #
 #     print("1. Successful creation test")
 #     try:
-#         acc1 = BankAccount(
+#         acc = BankAccount(
 #             client_personal_data={"name": "Joe",
 #                                   "surname": "Black",
 #                                   "phone_number": "+1555555555"},
 #             currency="USD"
 #         )
-#         print(f"Account created: {acc1}")
 #     except Exception as e:
 #         print(f"Unexpected error!: {e}")
 #
 #     print("\n" + "-"*40 + "\n")
 #
-#     # 2.1. Frozen account test - withdraw
+#     print('2.1. Frozen account test - withdraw')
+#
 #     try:
-#         acc2 = BankAccount(
+#         acc = BankAccount(
 #             client_personal_data={"name": "Bill",
 #                                   "surname": "Gates",
 #                                   "phone_number": "+8547230943843"},
@@ -545,10 +791,9 @@ class InvestmentAccount(BankAccount):
 #             account_status="frozen",
 #             currency="USD"
 #         )
-#         print(f"Frozen account: {acc2}")
+#         print(f"Frozen account: {acc}")
 #         print("Withdrawal try...")
-#         acc2.withdraw(100)
-#         print(f"Balance after withdrawal: {acc2.protected_balance} {acc2.currency}")
+#         acc.withdraw(100)
 #     except AccountFrozenError as e:
 #         print(f"The expected exception was successfully caught: {e}")
 #     except Exception as e:
@@ -559,16 +804,15 @@ class InvestmentAccount(BankAccount):
 #     print("2.2. Frozen account test - deposit")
 #
 #     try:
-#         acc3 = BankAccount(client_personal_data={"name": "Bill",
+#         acc = BankAccount(client_personal_data={"name": "Bill",
 #                                   "surname": "Hurley",
 #                                   "phone_number": "+854834843843"},
 #             protected_balance=5000.0,
 #             account_status="frozen",
 #             currency="USD")
-#         print(f"Frozen account: {acc3}")
+#         print(f"Frozen account: {acc}")
 #         print("Deposit try...")
-#         acc3.deposit(100)
-#         print(f"Balance after deposit: {acc3.protected_balance} {acc3.currency}")
+#         acc.deposit(100)
 #     except AccountFrozenError as e:
 #         print(f"The expected exception was successfully caught: {e}")
 #     except Exception as e:
@@ -579,16 +823,186 @@ class InvestmentAccount(BankAccount):
 #     print("3. Successful deposit and withdrawal test")
 #
 #     try:
-#         acc4 = BankAccount(
+#         acc = BankAccount(
 #             client_personal_data={"name": "Joe",
 #                                   "surname": "Black",
 #                                   "phone_number": "+1555555555"},
 #             currency="USD"
 #         )
-#         print(f"Account created: {acc4}")
-#         acc4.deposit(500)
-#         print(f"Balance after deposit: {acc4.protected_balance} {acc4.currency}")
-#         acc4.withdraw(400)
-#         print(f"Balance after withdrawal: {acc4.protected_balance} {acc4.currency}")
+#         acc.deposit(500)
+#         acc.withdraw(400)
+#     except Exception as e:
+#         print(f"Unexpected error!: {e}")
+#
+#     print("\n" + "-" * 40 + "\n")
+#
+#     print("=== Bank system test (Day 2) ===\n")
+#
+#     print("\n" + "-" * 40 + "\n")
+#
+#     print("1.1. Savings account successful creation and operations test")
+#
+#     try:
+#         acc = SavingsAccount(
+#             client_personal_data={"name": "Joe",
+#                                   "surname": "Black",
+#                                   "phone_number": "+1555555555"},
+#             currency="RUB"
+#         )
+#         print(acc)
+#         acc.deposit(10500)
+#         acc.withdraw(100)
+#         acc.apply_monthly_interest()
+#     except Exception as e:
+#         print(f"Unexpected error!: {e}")
+#
+#     print("\n" + "-" * 40 + "\n")
+#
+#     print("1.2. Savings account failed withdrawal test")
+#
+#     try:
+#         acc = SavingsAccount(
+#             client_personal_data={"name": "Joe",
+#                                   "surname": "Black",
+#                                   "phone_number": "+1555555555"},
+#             currency="KZT"
+#         )
+#         acc.deposit(10000)
+#         acc.withdraw(500)
+#         acc.apply_monthly_interest()
+#     except InsufficientFundsError as e:
+#         print(f"The expected exception was successfully caught: {e}")
+#     except Exception as e:
+#         print(f"Error! Expected InsufficientFundsError, got instead: {type(e).__name__}")
+#
+#     print("\n" + "-" * 40 + "\n")
+#
+#     print("1.3. Savings account failed monthly interest application test")
+#
+#     try:
+#         acc = SavingsAccount(
+#             client_personal_data={"name": "Joe",
+#                                   "surname": "Black",
+#                                   "phone_number": "+1555555555"},
+#             currency="KZT"
+#         )
+#         acc.deposit(1000)
+#         acc.apply_monthly_interest()
+#     except InvalidOperationError as e:
+#         print(f"The expected exception was successfully caught: {e}")
+#     except Exception as e:
+#         print(f"Error! Expected InvalidOperationError, got instead: {type(e).__name__}")
+#
+#     print("\n" + "-" * 40 + "\n")
+#
+#     print("2.1. Premium account successful creation and operations test")
+#
+#     try:
+#         acc = PremiumAccount(
+#             client_personal_data={"name": "Joe",
+#                                   "surname": "Black",
+#                                   "phone_number": "+1555555555"},
+#             currency="USD"
+#         )
+#         print(acc)
+#         acc.deposit(10000)
+#         acc.withdraw(10500)
+#     except Exception as e:
+#         print(f"Unexpected error!: {e}")
+#
+#     print("\n" + "-" * 40 + "\n")
+#
+#     print("2.2. Premium account failed withdrawal test 1")
+#
+#     try:
+#         acc = PremiumAccount(
+#             client_personal_data={"name": "Joe",
+#                                   "surname": "Black",
+#                                   "phone_number": "+1555555555"},
+#             currency="USD"
+#         )
+#         print(acc)
+#         acc.deposit(100000)
+#         acc.withdraw(20000)
+#     except InvalidOperationError as e:
+#         print(f"The expected exception was successfully caught: {e}")
+#     except Exception as e:
+#         print(f"Unexpected error!: {e}")
+#
+#     print("\n" + "-" * 40 + "\n")
+#
+#     print("2.3. Premium account failed withdrawal test 2")
+#
+#     try:
+#         acc = PremiumAccount(
+#             client_personal_data={"name": "Joe",
+#                                   "surname": "Black",
+#                                   "phone_number": "+1555555555"},
+#             currency="USD"
+#         )
+#         print(acc)
+#         acc.deposit(10000)
+#         acc.withdraw(12000)
+#     except InsufficientFundsError as e:
+#         print(f"The expected exception was successfully caught: {e}")
+#     except Exception as e:
+#         print(f"Unexpected error!: {e}")
+#
+#     print("\n" + "-" * 40 + "\n")
+#
+#     print("3.1. Investment account successful creation and operations test")
+#
+#     try:
+#         acc = InvestmentAccount(
+#             client_personal_data={"name": "Joe",
+#                                   "surname": "Black",
+#                                   "phone_number": "+1555555555"},
+#             currency="USD"
+#         )
+#         print(acc)
+#         acc.deposit(100000)
+#         acc.buy_asset('main', 'stocks', 'AAPL', 100)
+#         acc.buy_asset('main', 'bonds', 'VEXUS', 50) #imagined bond name
+#         acc.withdraw(50000)
+#         acc.project_yearly_growth('main') #there will be an error for the bond that is not listed, but code still will function
+#         acc.get_account_info()
+#     except Exception as e:
+#         print(f"Unexpected error!: {e}")
+#
+#     print("\n" + "-" * 40 + "\n")
+#
+#     print("3.2. Investment account failed withdrawal test")
+#
+#     try:
+#         acc = InvestmentAccount(
+#             client_personal_data={"name": "Joe",
+#                                   "surname": "Black",
+#                                   "phone_number": "+1555555555"},
+#             currency="USD"
+#         )
+#         print(acc)
+#         acc.deposit(100000)
+#         acc.withdraw(100000)
+#     except InvalidOperationError as e:
+#         print(f"The expected exception was successfully caught: {e}")
+#     except Exception as e:
+#         print(f"Unexpected error!: {e}")
+#
+#     print("\n" + "-" * 40 + "\n")
+#
+#     print("3.3. Investment account failed asset sell test")
+#
+#     try:
+#         acc = InvestmentAccount(
+#             client_personal_data={"name": "Joe",
+#                                   "surname": "Black",
+#                                   "phone_number": "+1555555555"},
+#             currency="USD"
+#         )
+#         print(acc)
+#         acc.buy_asset('main', 'stocks', 'AAPL', 100)
+#         acc.sell_asset('main', 'stocks', 'AAPL', 200)
+#     except InvalidOperationError as e:
+#         print(f"The expected exception was successfully caught: {e}")
 #     except Exception as e:
 #         print(f"Unexpected error!: {e}")
