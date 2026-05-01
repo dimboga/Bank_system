@@ -240,6 +240,7 @@ class TransactionQueue:
         else:
             self.entry_finder.remove(transaction.transaction_id)
             transaction._transaction_status = 'canceled'
+            transaction._updated_timestamp = datetime.now()
             print(f"Transaction {transaction.transaction_id} has been canceled!")
 
     def pop_transaction(self):
@@ -297,6 +298,7 @@ class TransactionProcessor:
             transaction_in_process._updated_timestamp = datetime.now()
             transaction_in_process._failed_reason = str(e)
             return f"Transaction {transaction_in_process.transaction_id} failed: {e}"
+        # Non-critical errors give chance to retry the transaction
         except Exception as e:
             if transaction_in_process.transaction_attempts < transaction_in_process.MAX_TRANSACTION_ATTEMPTS:
                 transaction_in_process._transaction_attempts += 1
